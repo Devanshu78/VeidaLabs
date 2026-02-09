@@ -32,18 +32,55 @@ app.post("/api/v1/ask-jiji", async (req, res) => {
         errors: error.issues[0].message || "Unknown error",
       });
     }
-    // const { query } = data;
+    const { query } = data;
     const client = await pool.connect();
     if (!client) {
       return res
         .status(500)
         .json({ message: "Failed to connect to the database" });
     }
-    return res.json({ answer: "This is a mock answer from Jiji." });
+    try {
+      await client.query(
+        `INSERT INTO queries (query, user_id, created_at) VALUES ($1, $2, NOW())`,
+        [query, req.headers["x-userid"]],
+      );
+
+      const resourcesResult = await client.query(
+        `SELECT id, title, type, url, keywords 
+         FROM resources 
+         WHERE keywords ILIKE $1 
+         ORDER BY created_at DESC 
+         LIMIT 5`,
+        [`%${query}%`],
+      );
+
+      const mockAnswer = query.toLowerCase().includes("rag")
+        ? "RAG (Retrieval-Augmented Generation) combines information retrieval with language generation. Jiji retrieves relevant PPTs/videos first, then generates personalized explanations."
+        : `Jiji found resources matching "${query}". Check the resources section for PPTs and videos to learn more!`;
+
+      return res.json({
+        success: true,
+        answer: mockAnswer,
+        resources: resourcesResult.rows.map((r) => ({
+          id: r.id,
+          title: r.title,
+          type: r.type,
+          url: r.url,
+        })),
+        query_logged: true,
+      });
+    } finally {
+      client.release();
+    }
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Something went wrong.", error: error.message });
+    console.error("Ask-Jiji error:", error);
+    return res.status(500).json({
+      message: "Internal server error",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "An error occurred while processing your request.",
+    });
   }
 });
 
